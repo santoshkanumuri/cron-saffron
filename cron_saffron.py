@@ -1,566 +1,923 @@
+import requests
+import pandas as pd
+import numpy as np
 import os
+import json
+from datetime import datetime
 import time
 import re
+import dotenv
 import logging
-import json
-import csv
+from urllib.parse import urlparse, parse_qs
+from bs4 import BeautifulSoup as BS
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
-from datetime import datetime, timedelta
-from urllib.parse import urlparse, parse_qs
-import requests
-import pandas as pd
-import numpy as np
 from pymongo import MongoClient
-from bs4 import BeautifulSoup as BS
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
-from selenium.webdriver.firefox.service import Service
-from dotenv import load_dotenv
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from PIL import Image, ImageStat
 
-# Initialize environment and logging
-load_dotenv()
+# Load environment variables
+dotenv.load_dotenv()
+
+# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('scraper.log'),
+        logging.FileHandler("saffron_scraper.log"),
         logging.StreamHandler()
     ]
 )
 
-firefox_path = "/usr/bin/firefox"  # Change this if Firefox is installed elsewhere
-geckodriver_path = "/home/ubuntu/saffron-art-scraper/cron-saffron/geckodriver"
+# Constants
+SAFFRON_KEY = "Saffron Art"
+SAFFRON_ART_SCRAPE_PATH = 'saffron_art_scrape.csv'
+NEXT_PAGE_IDS = ["ContentPlaceHolder1_Next", "ContentPlaceHolder1_lnkNext"]
 
-class SaffronArtScraper:
-    def __init__(self):
-        self.SAFFRON_KEY = "Saffron Art"
-        self.NEXT_PAGE_IDS = ["ContentPlaceHolder1_Next", "ContentPlaceHolder1_lnkNext"]
-        self.client = None
-        self.collection = None
-        self.driver = None
-        self.setup_mongo()
-        self.setup_driver()
+# MongoDB configuration
+MONGO_URI = os.getenv('MONGO_URI')
+DATABASE_NAME = 'art_database'
+COLLECTION_NAME = 'art_collection'
 
-    def setup_mongo(self):
-        """Initialize MongoDB connection with retries"""
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                self.client = MongoClient(os.getenv('MONGO_URI'), serverSelectionTimeoutMS=5000)
-                self.client.server_info()  # Test connection
-                db = self.client[os.getenv('DATABASE_NAME', 'art_database')]
-                self.collection = db[os.getenv('COLLECTION_NAME', 'art_collection')]
-                logging.info("Successfully connected to MongoDB")
-                return
-            except Exception as e:
-                logging.error(f"MongoDB connection failed (attempt {attempt+1}/{max_retries}): {e}")
-                if attempt == max_retries - 1:
-                    raise
-                time.sleep(2 ** attempt)
+# Email configuration
+SMTP_SERVER = os.getenv('SMTP_SERVER')
+SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
+EMAIL_USER = os.getenv('EMAIL_USER')
+EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
+RECIPIENT_EMAIL = os.getenv('RECIPIENT_EMAIL')
 
-    def setup_driver(self):
-        """Initialize Chrome WebDriver with proper configuration"""
-        from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.chrome.service import Service
-        import chromedriver_autoinstaller
+def main():
+    """Main function to run scraping and email sending"""
+    try:
+        logging.info("Starting Saffron Art scraping process")
 
-        options = Options()
-        options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--disable-blink-features=AutomationControlled")
+        # Connect to MongoDB
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        db = client[DATABASE_NAME]
+        collection = db[COLLECTION_NAME]
 
-        # Auto-install and configure chromedriver
-        chromedriver_path = chromedriver_autoinstaller.install()
+        # Get last scraped date
+        last_auction_date = get_last_auction_collected(collection)
 
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                self.driver = webdriver.Chrome(
-                    service=Service(chromedriver_path),
-                    options=options
-                )
-                self.driver.implicitly_wait(15)
-                logging.info("Chrome WebDriver initialized successfully")
-                return
-            except Exception as e:
-                logging.error(f"Chrome initialization failed (attempt {attempt+1}/{max_retries}): {e}")
-                if attempt == max_retries - 1:
-                    raise RuntimeError("Failed to initialize Chrome after multiple attempts")
-                time.sleep(5 * (attempt + 1))
+        # Scrape new data
+        new_data = scrape_new_auctions(last_auction_date, collection)
 
-    def get_last_auction_date(self):
-        """
-        Retrieves the latest auction date from the MongoDB collection for 'Saffron Art'.
-        Utilizes the 'iso_date' field, which is in ISO 8601 format.
+        if new_data:
+            # Save to CSV
+            df = pd.DataFrame(new_data)
+            csv_path = f"saffron_art_{datetime.now().strftime('%Y%m%d')}.csv"
+            df.to_csv(csv_path, index=False)
+            logging.info(f"Saved new data to {csv_path}")
 
-        Returns:
-            datetime: The latest auction date or datetime.min if not found.
-        """
-        try:
-            # Retrieve the latest auction based on 'iso_date'
-            last_document = self.collection.find_one(
-                {'auction_house': SAFFRON_KEY},
-                sort=[('iso_date', -1)]
-            )
-            if last_document and 'iso_date' in last_document:
-                last_date = last_document['iso_date']
-                if isinstance(last_date, str):
-                    try:
-                        # Parse the ISO 8601 string to a datetime object
-                        dt = datetime.fromisoformat(last_date)
-                    except ValueError:
-                        logging.error(f"Date format mismatch for iso_date: {last_date}")
-                        dt = datetime.min
-                    last_date = dt  # Keep it as datetime object
-                elif isinstance(last_date, datetime):
-                    # Already a datetime object
-                    pass
-                else:
-                    # Unrecognized format, set to minimum datetime
-                    last_date = datetime.min
-                return last_date
+            # Send email with attachment
+            send_email(csv_path, has_data=True)
+        else:
+            # Send status email with no data
+            send_email(has_data=False)
+
+    except Exception as e:
+        logging.error(f"Main process failed: {str(e)}")
+        send_error_email(str(e))
+    finally:
+        logging.info("Scraping process completed")
+
+def send_email(csv_path=None, has_data=False, error_msg=None):
+    """Send email with CSV attachment or status message"""
+    msg = MIMEMultipart()
+    msg['From'] = EMAIL_USER
+    msg['To'] = RECIPIENT_EMAIL
+
+    if error_msg:
+        msg['Subject'] = "Saffron Scraper Error Alert"
+        body = f"Scraping failed with error:\n\n{error_msg}"
+    elif has_data:
+        msg['Subject'] = f"Saffron Art Data - {datetime.now().strftime('%Y-%m-%d')}"
+        body = "New Saffron Art data is attached."
+        # Attach CSV
+        with open(csv_path, "rb") as attachment:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(attachment.read())
+        encoders.encode_base64(part)
+        part.add_header(
+            "Content-Disposition",
+            f"attachment; filename= {os.path.basename(csv_path)}",
+        )
+        msg.attach(part)
+    else:
+        msg['Subject'] = "Saffron Art Data Update"
+        body = "No new data found in this scraping cycle."
+
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        logging.info("Email sent successfully")
+    except Exception as e:
+        logging.error(f"Failed to send email: {str(e)}")
+
+def send_error_email(error_msg):
+    """Send error notification email"""
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_USER
+        msg['To'] = RECIPIENT_EMAIL
+        msg['Subject'] = "Saffron Scraper Error Alert"
+        body = f"The scraping process encountered an error:\n\n{error_msg}"
+        msg.attach(MIMEText(body, 'plain'))
+
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        logging.info("Error email sent successfully")
+    except Exception as e:
+        logging.error(f"Failed to send error email: {str(e)}")
+
+def initialize_driver():
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument('log-level=3')
+    driver = webdriver.Firefox(options=options)
+    driver.implicitly_wait(10)
+    return driver
+
+# Streamlit
+
+def get_last_auction_collected(collection):
+    """
+    Retrieves the latest auction date from the MongoDB collection for 'Saffron Art'.
+    Utilizes the 'iso_date' field, which is in ISO 8601 format.
+
+    Returns:
+        datetime: The latest auction date or datetime.min if not found.
+    """
+    try:
+        # Retrieve the latest auction based on 'iso_date'
+        last_document = collection.find_one(
+            {'auction_house': SAFFRON_KEY},
+            sort=[('iso_date', -1)]
+        )
+        if last_document and 'iso_date' in last_document:
+            last_date = last_document['iso_date']
+            if isinstance(last_date, str):
+                try:
+                    # Parse the ISO 8601 string to a datetime object
+                    dt = datetime.fromisoformat(last_date)
+                except ValueError:
+                    logging.error(f"Date format mismatch for iso_date: {last_date}")
+                    dt = datetime.min
+                last_date = dt  # Keep it as datetime object
+            elif isinstance(last_date, datetime):
+                # Already a datetime object
+                pass
             else:
-                return datetime.min
-        except Exception as e:
-            logging.error(f"Error retrieving last auction date: {e}")
+                # Unrecognized format, set to minimum datetime
+                last_date = datetime.min
+            return last_date
+        else:
             return datetime.min
+    except Exception as e:
+        logging.error(f"Error retrieving last auction date: {e}")
+        return datetime.min
 
-    def scrape_and_save(self):
-        """Main scraping workflow"""
-        try:
-            last_date = self.get_last_auction_date()
-            new_data = self.scrape_new_auctions(last_date)
+def scrape_new_auctions(last_auction_collected_date, collection, progress_bar):
+    """
+    Fetches all auctions from Saffron Art's API, filters out the already scraped ones,
+    and prepares a list of new auctions to scrape.
 
-            if new_data:
-                filename = self.save_to_csv(new_data)
-                self.send_email_with_attachment(filename)
-                logging.info(f"Scraping completed successfully. File: {filename}")
-            else:
-                logging.info("No new data found")
+    Args:
+        last_auction_collected_date (datetime): The date of the last scraped auction.
+        collection (MongoClient.collection): The MongoDB collection instance.
 
-        except Exception as e:
-            logging.error(f"Scraping failed: {e}")
-            raise
-        finally:
-            self.cleanup()
+    Returns:
+        list: A list of new auction data dictionaries.
+    """
+    # Get all auctions from Saffron Art website
+    headers = {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'application/json; charset=utf-8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Referer': "https://www.saffronart.com/auctions/allauctions.aspx",
+        'Content-Type': 'application/json; charset=utf-8',
+        'Origin': "https://www.saffronart.com",
+        'Connection': 'keep-alive',
+        'TE': 'Trailers',
+    }
 
-    def cleanup(self):
-        """Clean up resources"""
-        if self.driver:
-            try:
-                self.driver.quit()
-            except Exception as e:
-                logging.error(f"Error closing WebDriver: {e}")
-        if self.client:
-            try:
-                self.client.close()
-            except Exception as e:
-                logging.error(f"Error closing MongoDB connection: {e}")
-
-    def scrape_new_auctions(self, last_auction_collected_date):
-        """Scrape new auctions with MongoDB date filtering"""
-        logging.info(f"Starting scrape from last collected date: {last_auction_collected_date}")
-
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-                'Accept': 'application/json; charset=utf-8',
-            }
-            response = requests.get(
-                'https://www.saffronart.com/Service1.svc/FetchAllSaffronAuctions/?AucType=ART',
-                headers=headers,
-                timeout=30
-            )
-            response.raise_for_status()
-            auction_json = response.json()
-        except Exception as e:
-            logging.error(f"Failed to fetch auctions: {e}")
-            return []
-
-        try:
-            auctions_data = auction_json["Events"][2]
-            auction_df = pd.DataFrame(auctions_data)
-
-            # Original date processing logic
-            auction_df['EventStartDate'] = auction_df['EventStartDate'].str.extract(r'/Date\((\d+)-').astype(float)
-            auction_df['s_date'] = pd.to_datetime(auction_df['EventStartDate'], unit='ms')
-
-            # Apply MongoDB date filter
-            auction_df = auction_df[
-                (auction_df['s_date'] > last_auction_collected_date) &
-                (auction_df['s_date'] < pd.Timestamp.now())
-            ]
-
-            if auction_df.empty:
-                logging.info("No new auctions found based on last collected date")
-                return []
-
-            auctions_to_scrape = []
-            for _, row in auction_df.iterrows():
-                auctions_to_scrape.append({
-                    'link': f"https://www.saffronart.com/auctions/PostCatalog.aspx?eid={row['EventId']}",
-                    's_date': row['s_date'],
-                    'e_date': pd.to_datetime(row['EventEndDate'], unit='ms')
-                })
-
-            new_data = []
-            for idx, auction in enumerate(auctions_to_scrape):
-                logging.info(f"Processing auction {idx+1}/{len(auctions_to_scrape)}")
-                auction_data = self.scrape_auction(auction)
-                if auction_data:
-                    new_data.extend(auction_data)
-                    logging.info(f"Collected {len(auction_data)} lots from this auction")
-
-            return new_data
-
-        except Exception as e:
-            logging.error(f"Error processing auction data: {e}")
-            return []
-
-            auction_df = pd.DataFrame(auctions_data)
-            required_columns = ['EventStartDate', 'EventEndDate', 'EventId']
-            if not all(col in auction_df.columns for col in required_columns):
-                logging.error("Missing required columns in auction data")
-                return []
-
-        # Process dates
-        auction_df['EventStartDate'] = auction_df['EventStartDate'].str.extract(r'/Date\((\d+)-').astype(float)
-        auction_df['EventEndDate'] = auction_df['EventEndDate'].str.extract(r'/Date\((\d+)-').astype(float)
-        auction_df['s_date'] = pd.to_datetime(auction_df['EventStartDate'], unit='ms')
-        auction_df['e_date'] = pd.to_datetime(auction_df['EventEndDate'], unit='ms')
-
-        # Filter new auctions
-        now = pd.Timestamp.now()
-        auctions_to_scrape = []
-        for _, row in auction_df.iterrows():
-            if row['s_date'] > last_auction_collected_date and row['s_date'] < now:
-                auction_link = f"https://www.saffronart.com/auctions/PostCatalog.aspx?eid={row['EventId']}"
-                auctions_to_scrape.append({
-                    'link': auction_link,
-                    's_date': row['s_date'],
-                    'e_date': row['e_date']
-                })
-
-        if not auctions_to_scrape:
-            logging.info("No new auctions to scrape")
-            return []
-
-        # Scrape each auction
-        new_data = []
-        total_auctions = len(auctions_to_scrape)
-        for idx, auction in enumerate(auctions_to_scrape):
-            try:
-                logging.info(f"Processing auction {idx+1}/{total_auctions}")
-                auction_data = self.scrape_auction(auction)
-                if auction_data:
-                    new_data.extend(auction_data)
-            except Exception as e:
-                logging.error(f"Failed to process auction {auction['link']}: {e}")
-                continue
-
-        return new_data
-
-    def scrape_auction(self, auction):
-        """Scrape individual auction details"""
-        logging.info(f"Scraping auction: {auction['link']}")
-        try:
-            self.driver.get(auction['link'])
-            time.sleep(2)  # Allow page load
-        except Exception as e:
-            logging.error(f"Failed to load auction page: {e}")
-            return []
-
-        lot_links = []
-        next_page_id = self.check_for_page_type()
-        while True:
-            try:
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                current_links = self.get_want_this_data_ids()
-                lot_links.extend(current_links)
-
-                next_button = self.find_element_by_id(next_page_id)
-                if not next_button or next_button.get_attribute('disabled'):
-                    break
-
-                next_button.click()
-                time.sleep(2)
-            except Exception as e:
-                logging.error(f"Pagination error: {e}")
-                break
-
-        if not lot_links:
-            logging.warning("No lots found in auction")
-            return []
-
-        # Process lots
-        auction_data = []
-        for lot_link in lot_links:
-            if not lot_link.startswith('https://www.saffronart.com/auctions/PostWork.aspx?l='):
-                continue
-            try:
-                lot_data = self.process_lot(lot_link, auction)
-                if lot_data:
-                    auction_data.append(lot_data)
-            except Exception as e:
-                logging.error(f"Failed to process lot {lot_link}: {e}")
-                continue
-
-        return auction_data
-
-    def process_lot(self, lot_link, auction):
-        """Process individual lot with MongoDB checks"""
-        # Original duplicate check logic
-        if self.collection.find_one({'lot_link': lot_link}):
-            logging.info(f"Skipping existing lot: {lot_link}")
-            return None
-
-        try:
-            response = requests.get(lot_link, timeout=30)
-            response.raise_for_status()
-            soup = BS(response.text, 'lxml')
-        except Exception as e:
-            logging.error(f"Failed to fetch lot page: {e}")
-            return None
-
-        try:
-            # Original data extraction logic
-            lot_id = soup.find("div", {"class": "clearfix artworkImageOptions"}).text.strip()
-            auction_info = soup.find('div', class_='artworkDetails').p.strong.text
-            auction_name = auction_info.split('\n')[1].strip()
-
-            # Original estimate processing
-            estimate_text = soup.find('label', id='ContentPlaceHolder1_lblEstimates').text.split('\n')
-            lo_est = hi_est = None
-            if len(estimate_text) > 1:
-                estimates = estimate_text[1].split(' - ')
-                lo_est = float(estimates[0].replace('$', '').replace(',', '').strip())
-                hi_est = float(estimates[1].replace('$', '').replace(',', '').strip())
-
-            # Original MongoDB date format
-            art_data = {
-                'lot_id': lot_id,
-                'lot_link': lot_link,
-                'auction_name': auction_name,
-                'auction_date': auction['s_date'].strftime('%Y-%m-%d'),
-                'iso_date': auction['s_date'].to_pydatetime(),  # Original datetime format
-                'lo_est': lo_est,
-                'hi_est': hi_est,
-                'auction_house': self.SAFFRON_KEY,
-                'date_scraped': datetime.now()
-            }
-
-            # Insert into MongoDB with original logic
-            try:
-                self.collection.update_one(
-                    {'lot_id': art_data['lot_id']},
-                    {'$setOnInsert': art_data},
-                    upsert=True
-                )
-                logging.info(f"Inserted/updated lot {lot_id} in MongoDB")
-            except Exception as e:
-                logging.error(f"MongoDB operation failed: {e}")
-
-            return self.clean_saffron(art_data)
-
-        except Exception as e:
-            logging.error(f"Error processing lot {lot_link}: {e}")
-            return None
-
-    def generate_auction_string(self, auction_link, auction_date, lot_id):
-        """Generate file path string"""
-        parsed_url = urlparse(auction_link)
-        query_params = parse_qs(parsed_url.query)
-        eid = query_params.get('eid', [''])[0]
-        return os.path.join("data_files", "neww", "saffron", f"{auction_date}-{eid}", f"{lot_id}.jpg")
-
-    def get_want_this_data_ids(self):
-        """Get lot links from current page"""
-        try:
-            elements = self.driver.find_elements(By.CLASS_NAME, 'WantThis')
-            return [
-                f"https://www.saffronart.com/auctions/PostWork.aspx?l={el.get_attribute('data-id')}"
-                for el in elements
-            ]
-        except Exception as e:
-            logging.error(f"Error getting lot links: {e}")
-            return []
-
-    def check_for_page_type(self):
-        """Find next page button"""
-        for page_id in self.NEXT_PAGE_IDS:
-            if self.find_element_by_id(page_id):
-                return page_id
+    try:
+        response = requests.get('https://www.saffronart.com/Service1.svc/FetchAllSaffronAuctions/?AucType=ART', headers=headers, timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to fetch auctions from Saffron Art: {e}")
+        logging.error(f"Failed to fetch auctions: {e}")
         return None
 
-    def find_element_by_id(self, element_id):
-        """Safe element finder"""
-        try:
-            return self.driver.find_element(By.ID, element_id)
-        except:
+    try:
+        auction_json = response.json()
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to parse JSON response: {e}")
+        logging.error(f"JSON parsing error: {e}")
+        return None
+
+    # Validate JSON structure
+    if "Events" not in auction_json:
+        logging.error("JSON response does not contain 'Events' key.")
+        logging.error("Missing 'Events' key in JSON response.")
+        return None
+
+    events = auction_json["Events"]
+
+    # Ensure 'Events' is a list with at least three elements
+    if not isinstance(events, list) or len(events) < 3:
+
+        logging.error("Invalid 'Events' structure in JSON response.")
+        return None
+
+    # Ensure the third element is a list
+    if not isinstance(events[2], list):
+
+        logging.error("Third element in 'Events' is not a list.")
+        return None
+
+    auctions_data = events[2]
+
+    if not auctions_data:
+
+        logging.warning("No auction data found.")
+        return None
+
+    auction_df = pd.DataFrame(auctions_data)
+
+    # Check if necessary columns exist
+    required_columns = ['EventStartDate', 'EventEndDate', 'EventId']
+    for col in required_columns:
+        if col not in auction_df.columns:
+
+            logging.error(f"Missing column '{col}' in auction data.")
             return None
 
-    def scrape_each_reg_work(self, reg_work_link):
-        """Scrape individual lot details"""
+    # Clean up the event dates from API response
+    auction_df['EventStartDate'] = auction_df['EventStartDate'].str.extract(r'/Date\((\d+)-').astype(float)
+    auction_df['EventEndDate'] = auction_df['EventEndDate'].str.extract(r'/Date\((\d+)-').astype(float)
+
+    # Convert timestamps to datetime
+    auction_df['s_date'] = pd.to_datetime(auction_df['EventStartDate'], unit='ms')
+    auction_df['e_date'] = pd.to_datetime(auction_df['EventEndDate'], unit='ms')
+
+    # Build the list of auctions to scrape
+    auctions_to_scrape = []
+
+    for index, row in auction_df.iterrows():
+        s_date = row['s_date']
+        e_date = row['e_date']
+
+        if s_date > last_auction_collected_date and s_date < pd.Timestamp.now():
+            auction_link = f"https://www.saffronart.com/auctions/PostCatalog.aspx?eid={row['EventId']}"
+            auctions_to_scrape.append({
+                'link': auction_link,
+                's_date': s_date,
+                'e_date': e_date
+            })
+
+    if not auctions_to_scrape:
+
+        logging.info("No new auctions found.")
+        return None
+
+    # Start scraping auctions
+    new_data = []
+
+    total_auctions = len(auctions_to_scrape)
+    for idx, auction in enumerate(auctions_to_scrape):
+        logging.info(f"Scraping auction {idx + 1} of {total_auctions}: {auction['link']} starting on {auction['s_date'].strftime('%Y-%m-%d')}")
+        progress = (idx + 1) / total_auctions
+        progress_bar.progress(progress)
+
+        auction_data = scrape_auction(auction, collection)
+        if auction_data:
+            new_data.extend(auction_data)
+
+    return new_data
+
+def generate_auction_string(auction_link: str, auction_date: str, lot_id) -> str:
+    """
+    Generates a concatenated string in the format 'S-{auction_date}-{eid}' and appends it to a base directory path.
+
+    Args:
+        auction_link (str): The URL of the auction containing the 'eid' parameter.
+        auction_date (str): The date of the auction in 'yyyy-mm-dd' format.
+        lot_id: The ID of the lot.
+
+    Returns:
+        str: The complete path string in the format 'data_files/new/saffron/S-{auction_date}-{eid}/{lot_id}.jpg'.
+    """
+    # Parse the URL to extract query parameters
+    parsed_url = urlparse(auction_link)
+    query_params = parse_qs(parsed_url.query)
+
+    # Extract 'eid' parameter
+    eid_list = query_params.get('eid')
+    if not eid_list:
+        raise ValueError(f"'eid' parameter not found in the auction link: {auction_link}")
+
+    eid = eid_list[0]  # Get the first 'eid' value
+
+    # Validate auction_date format using regular expression
+    if not isinstance(auction_date, str):
+        raise TypeError("auction_date must be a string in 'yyyy-mm-dd' format.")
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', auction_date):
+        raise ValueError("auction_date must be in 'yyyy-mm-dd' format.")
+
+    # Generate the concatenated string
+    concatenated_str = f"{auction_date}-{eid}"
+
+    # Define the base directory path
+    base_dir = os.path.join("data_files", "neww", "saffron")
+
+    # Ensure lot_id is a string and strip any leading/trailing whitespace
+    lot_id_str = str(lot_id).strip()
+
+    # Define the filename with .jpg extension
+    filename = f"{lot_id_str}.jpg"
+
+    # Combine base directory, concatenated string, and filename using os.path.join
+    final_path = os.path.join(base_dir, concatenated_str, filename)
+    print(final_path)
+
+    return final_path
+
+def scrape_auction(auction, collection):
+    """
+    Scrapes individual auction details using Selenium WebDriver.
+
+    Args:
+        auction (dict): A dictionary containing auction link and dates.
+        collection (MongoClient.collection): The MongoDB collection instance.
+
+    Returns:
+        list: A list of dictionaries containing scraped lot data.
+    """
+    # Set up Selenium WebDriver
+    try:
+        driver = initialize_driver()
+    except Exception as e:
+        logging.error(f"Selenium WebDriver initialization error: {e}")
+        return []
+
+    auction_link = auction['link']
+    try:
+        driver.get(auction_link)
+    except Exception as e:
+        logging.error(f"Failed to load auction page: {e}")
+        driver.quit()
+        return []
+
+    lot_link_list = []
+
+    # Pagination handling
+    next_page_type = check_for_page_type(driver)
+    page_number = 1
+    while True:
         try:
-            response = requests.get(reg_work_link, timeout=30)
-            response.raise_for_status()
-            soup = BS(response.text, 'lxml')
+            time.sleep(2)
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            w_l = get_want_this_data_ids(driver)
+            lot_link_list.extend(w_l)
+
+            next_page = find_element_by_id_if_exists(driver, next_page_type)
+
+            if not next_page or next_page.get_attribute('disabled'):
+                break
+            else:
+                driver.execute_script("arguments[0].click();", next_page)
+                driver.implicitly_wait(10)
+                page_number += 1
         except Exception as e:
-            logging.error(f"Failed to fetch lot page: {e}")
-            return None
+            logging.error(f"Error during pagination on {auction_link}: {e}")
+            break
 
+    if not lot_link_list:
+        logging.warning("No lots found in the auction.")
+        driver.quit()
+        return []
+
+    # Scrape lot data
+    auction_data = []
+    total_lots = len(lot_link_list)
+    for idx, lot_link in enumerate(lot_link_list):
+        if pd.isnull(lot_link):
+            continue
+        if not lot_link.startswith('https://www.saffronart.com/auctions/PostWork.aspx?l='):
+            continue
+        if not lot_link:
+            logging.warning("Empty lot link. Skipping.")
+            continue
+
+        logging.info(f"Processing lot {idx + 1} of {total_lots}")
+        # Process each lot
+        lot_data = process_lot(lot_link, auction, collection)
+        if lot_data:
+            auction_data.append(lot_data)
+        else:
+            logging.warning(f"Failed to process lot: {lot_link}")
+
+    driver.quit()
+    return auction_data
+
+def process_lot(lot_link, auction, collection):
+    """
+    Processes an individual lot and extracts data.
+
+    Args:
+        lot_link (str): The URL of the lot.
+        auction (dict): The auction details.
+        collection (MongoClient.collection): The MongoDB collection instance.
+
+    Returns:
+        dict: A dictionary containing the lot data.
+    """
+    logging.info(f"Scraping lot: {lot_link}")
+    # Check if the lot already exists in MongoDB
+    if collection.find_one({'lot_link': lot_link}):
+        logging.info(f"Lot {lot_link} already exists in the database. Skipping.")
+        return None
+
+    lot_data = scrape_each_reg_work(lot_link)
+    if lot_data:
+        (
+            lot_id,
+            artist_name,
+            dob,
+            dod,
+            institution,
+            title,
+            winning_bid,
+            lo_est,
+            hi_est,
+            auction_name,
+            category,
+            style,
+            provenance,
+            last_provenance,
+            num_provenance,
+            exhibition,
+            details,
+            image_url
+        ) = lot_data
+
+        # Process image features
+        if image_url:
+            try:
+                dom_color, brightness = get_img_dom_color_and_brightness(image_url)
+            except Exception as e:
+                logging.error(f"Error processing image for lot {lot_link}: {e}")
+                dom_color = None
+                brightness = None
+        else:
+            dom_color = None
+            brightness = None
+
+        # Clean and prepare data
+        art_data = {
+            "lot_id": lot_id,
+            "lot_link": lot_link,
+            "artist_name": artist_name,
+            "dob": dob,
+            "dod": dod,
+            "institution": institution,
+            "title": title,
+            "winning_bid": winning_bid,
+            "lo_est": lo_est,
+            "hi_est": hi_est,
+            "auction_name": auction_name,
+            "auction_date": auction['s_date'].strftime('%Y-%m-%d'),
+            "auction_link": auction['link'],
+            "category": category,
+            "style": style,
+            "provenance": provenance,
+            "last_provenance": last_provenance,
+            "num_provenance": num_provenance,
+            "exhibition": exhibition,
+            "details": details,
+            "image_url": image_url,
+            "dom_color": dom_color,
+            "brightness": brightness,
+            'iso_date': auction['s_date'].isoformat(),
+            'est_cur': 'USD',
+        }
+
+        # Extract integer lot_id
+        int_lot_id = re.findall(r'\d+', str(lot_id))
+        if int_lot_id:
+            lot_id_int = int_lot_id[0]
+        else:
+            lot_id_int = lot_id
+
+        art_data['none_@file'] = generate_auction_string(auction['link'], auction['s_date'].strftime('%Y-%m-%d'), lot_id_int)
+
+        date_time = datetime.now().strftime('%Y%m%d-%H%M%S')
+        art_data = clean_saffron(art_data, date_time)
+
+        return art_data
+    else:
+        logging.warning(f"Failed to scrape lot: {lot_link}")
+        return None
+
+def get_want_this_data_ids(driver):
+    """
+    Retrieves all lot links from the auction page by finding elements with class 'WantThis'.
+
+    Args:
+        driver (webdriver): The Selenium WebDriver instance.
+
+    Returns:
+        list: A list of lot URLs.
+    """
+    try:
+        art_tags = driver.find_elements(By.CLASS_NAME, 'WantThis')
+        lot_list = []
+        for lot_id in art_tags:
+            work_id = lot_id.get_attribute('data-id')
+            if work_id:
+                lot_list.append(f"https://www.saffronart.com/auctions/PostWork.aspx?l={work_id}")
+        return lot_list
+    except Exception as e:
+        logging.error(f"Error retrieving 'WantThis' elements: {e}")
+        return []
+
+def check_for_page_type(driver):
+    """
+    Determines the next page button's ID from the list of possible IDs.
+
+    Args:
+        driver (webdriver): The Selenium WebDriver instance.
+
+    Returns:
+        str or None: The ID of the next page button or None if not found.
+    """
+    for next_page_id in NEXT_PAGE_IDS:
+        if find_element_by_id_if_exists(driver, next_page_id):
+            return next_page_id
+    return None
+
+def find_element_by_id_if_exists(_driver, id_):
+    try:
+        return _driver.find_element(By.ID, id_)
+    except:
+        return None
+
+def clean_saffron(art_data, date_time):
+    """
+    Cleans and processes the art data dictionary.
+
+    Args:
+        art_data (dict): The art data dictionary.
+        date_time (str): The current date and time as a string.
+
+    Returns:
+        dict: The cleaned art data dictionary.
+    """
+    art_data['auction_house'] = SAFFRON_KEY
+
+    try:
+        art_data["winning_bid"] = str(art_data["winning_bid"]).lstrip("$").rstrip("\r").replace(",", "")
+    except:
+        art_data["winning_bid"] = "Not Available"
+
+    try:
+        art_data['size'] = (art_data['details'].split('|')[-2]).replace(r"\(.*\)", "")
+    except:
+        art_data['size'] = ""
+
+    try:
+        art_data['medium'] = art_data['details'].split('|')[-3].lower().strip()
+    except:
+        art_data['medium'] = ""
+
+    try:
+        art_data['date_scraped'] = datetime.strptime(date_time, '%Y%m%d-%H%M%S')
+    except:
+        art_data['date_scraped'] = None
+
+    # Sold column is 1/0 based on winning bid
+    try:
+        art_data["sold"] = 1 if art_data.get("winning_bid") else 0
+    except:
+        art_data["sold"] = 0
+
+    try:
+        art_data['year_painted'] = re.search('([0-9]{4})', art_data['details']).group(1)
+    except:
+        art_data['year_painted'] = None
+
+    for col in ["artist_name", "category", "style"]:
         try:
-            # Extract basic info
-            lot_id = soup.find("div", {"class": "clearfix artworkImageOptions"}).text.strip()
-            auction_info = soup.find('div', class_='artworkDetails').p.strong.text
-            auction_name = auction_info.split('\n')[1].strip()
+            art_data[col] = ' '.join(art_data[col].split())
+        except:
+            pass
 
-            # Extract estimates
-            estimate_text = soup.find('label', id='ContentPlaceHolder1_lblEstimates').text.split('\n')
-            lo_est = hi_est = None
-            if len(estimate_text) > 1:
-                estimates = estimate_text[1].split(' - ')
-                lo_est = estimates[0].replace('$', '').replace(',', '').strip()
-                hi_est = estimates[1].replace('$', '').replace(',', '').strip()
+    for col in ["lo_est", "hi_est"]:
+        try:
+            art_data[col] = int(str(art_data[col]).lstrip("$").rstrip("\r").replace(",", ""))
+        except:
+            art_data[col] = "Not Available"
 
-            # Extract winning bid
-            winning_bid = None
-            winning_element = soup.find('b', class_='wining-text')
-            if winning_element:
-                winning_bid = winning_element.find_next('strong').text.replace('$', '').replace(',', '').strip()
+    # Media category mapping
+    media_category_list = []
+    m_db_path = os.path.join(os.path.dirname(__file__), "Media_DB.csv")
+    if os.path.exists(m_db_path):
+        media_db = pd.read_csv(m_db_path)
+        possible_mediums = media_db["Media"].tolist()
+        possible_mediums.extend(["paper", "board", "canvas"])
+        possible_mediums = [sub.replace(r')', '').replace(r'(', '') for sub in possible_mediums]
+        s = r"[^\|]\|"
+        possible_mediums = [mystring + s for mystring in possible_mediums]
+        s = r"\|[^\|]+?"
+        possible_mediums = [s + mystring for mystring in possible_mediums]
+        medium_regex = r'|'.join(possible_mediums)
+        try:
+            tmp = re.search(medium_regex, art_data['details']).group(1)
+            tmp = tmp.replace(r"\|", "").strip()
+            art_data['medium'] = re.sub(r".*(\d+).*", "", art_data['medium'])
+            if art_data["medium"] == '':
+                art_data['medium'] = tmp
+        except:
+            pass
 
-            # Artist info
-            artist_name = soup.find('a', id='ContentPlaceHolder1_AboutWork1__ArtistName').text.strip()
+        media_type = art_data["medium"]
+        media_category = ""
+        media_type_cleaned = media_type.strip()
 
-            # Image URL
-            image_url = soup.find(id='ContentPlaceHolder1_WorkDetails1__Image')['src']
+        filtered_df = media_db.query('Media == @media_type_cleaned')
+        if media_type_cleaned.endswith("paper"):
+            media_category = "1"
+        elif media_type_cleaned.endswith("board") or media_type_cleaned.endswith("card") or media_type_cleaned.endswith("canvas"):
+            media_category = "2"
+        else:
+            try:
+                media_category = str(filtered_df.iloc[0]['Category'])
+            except:
+                media_category = ""
 
-            # Details
-            details_soup = soup.find('span', id='ContentPlaceHolder1_AboutWork1_sn_Workdetails')
-            details = ' | '.join([elem.strip() for elem in details_soup.stripped_strings])
+        art_data["medium_category"] = media_category
+    else:
+        art_data["medium_category"] = ""
 
-            # Provenance
-            provenance = soup.find('p', id='ContentPlaceHolder1_AboutWork1__Provenance')
-            provenance_text = provenance.get_text(" | ", strip=True).replace("PROVENANCE | ", "") if provenance else ""
-            provenance_parts = provenance_text.split(" | ") if provenance_text else []
-            last_provenance = provenance_parts[-1] if provenance_parts else ""
-            num_provenance = len(provenance_parts)
+    # Size processing
+    art_data['size'] = art_data['size'].lower().strip()
+    art_data['size'] = ''.join([" " if ord(i) < 32 or ord(i) > 126 else i for i in art_data["size"]]).rstrip()
+    try:
+        art_data['size_x'] = float(re.search(r'(\d*\.\d+|\d+)', art_data['size']).group(1))
+    except:
+        art_data['size_x'] = 0
 
-            # Category and style
-            category_style = soup.find('a', id='ContentPlaceHolder1_AboutWork1_TellAFriendLink').find_previous('p').text
-            category = style = None
-            if 'Category:' in category_style:
-                category = category_style.split('Category: ')[1].split('\n')[0].strip()
-            if 'Style:' in category_style:
-                style = category_style.split('Style: ')[1].split('\n')[0].strip()
+    try:
+        art_data['size_y'] = float(re.search(r'x (\d*\.\d+|\d+)', art_data['size']).group(1))
+    except:
+        art_data['size_y'] = 0
 
-            return (
-                lot_id, artist_name, None, None, None, None, winning_bid,
-                lo_est, hi_est, auction_name, category, style, provenance_text,
-                last_provenance, num_provenance, None, details, image_url
-            )
+    art_data['size_z'] = 0
+    art_data['area'] = art_data['size_y'] * art_data['size_x']
 
+    try:
+        art_data["lot_id"] = re.search(r'(\d*\.\d+|\d+)', art_data['lot_id']).group(1)
+    except:
+        pass
+
+    # Signed
+    watchlist = ['signed', 'initial', 'inscribed']
+    art_data['signed'] = int(bool(re.search('|'.join(watchlist), art_data['details']))) if art_data['details'] else 0
+
+    # Multiple items
+    try:
+        watchlist = ["Diptych", 'Triptych', 'set of', '\\| b\\)']
+        art_data['multi_item'] = int(bool(re.search('|'.join(watchlist), art_data['details'])))
+        art_data['num_items'] = art_data['details'].count(r'\| [a-z]\)') + 1
+    except:
+        art_data['multi_item'] = 0
+        art_data['num_items'] = 1
+
+    return art_data
+
+def get_img_dom_color_and_brightness(url):
+    """
+    Calculates the dominant color and brightness of an image from a URL.
+
+    Args:
+        url (str): The image URL.
+
+    Returns:
+        tuple: A tuple containing the dominant color in hex format and the brightness value.
+    """
+    try:
+        with Image.open(requests.get(url, stream=True, timeout=10).raw) as img:
+            img.thumbnail((100, 100))
+            # Reduce colors
+            paletted = img.convert('P', palette=Image.Palette.ADAPTIVE, colors=5)
+            palette = paletted.getpalette()
+            color_counts = sorted(paletted.getcolors(), reverse=True)
+            palette_index = color_counts[0][1]
+            dominant_color = palette[palette_index * 3:palette_index * 3 + 3]
+
+            im = img.convert('HSV')
+            brightness = ImageStat.Stat(im).mean[2]
+
+            return rgb_to_hex(tuple(dominant_color)), str(brightness)
+    except Exception as e:
+        logging.error(f"Error processing image {url}: {e}")
+        return None, None
+
+def rgb_to_hex(rgb):
+    return '#%02x%02x%02x' % rgb
+
+def scrape_each_reg_work(reg_work_link):
+    """
+    Scrapes the details of each regular work (lot) from the Saffron Art website.
+
+    Args:
+        reg_work_link (str): The URL of the lot.
+
+    Returns:
+        tuple: A tuple containing all the extracted data for the lot.
+    """
+    while True:
+        try:
+            response = requests.get(reg_work_link, cookies={'UserPref': 'ps=20'}, timeout=10)
+            response.raise_for_status()
+            reg_work_soup = BS(response.text, 'lxml')
+            lot_id = reg_work_soup.find_all("div", {"class": "clearfix artworkImageOptions"})[-1].get_text()
+            break
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Request error: {e}")
+            time.sleep(5)
+            continue
         except Exception as e:
             logging.error(f"Error parsing lot page: {e}")
             return None
 
-    def clean_saffron(self, art_data):
-        """Original data cleaning logic"""
-        # Price cleaning
-        for field in ['lo_est', 'hi_est']:
-            if art_data.get(field):
-                try:
-                    art_data[field] = float(art_data[field])
-                except:
-                    art_data[field] = None
+    try:
+        auction_info = reg_work_soup.find('div', class_='artworkDetails').p.strong.text
+        auction_name = auction_info.split('\n')[1].strip()
+        ad = re.sub(r'-.*?\s', ' ', str(auction_info.split('\n')[3].strip()))
+        auction_date = datetime.strptime(ad, "%d %B %Y")
+    except Exception as e:
+        logging.error(f"Error extracting auction info: {e}")
+        return None
 
-        # Size parsing (original regex logic)
-        size_match = re.search(r'(\d+\.?\d*)\s*x\s*(\d+\.?\d*)', art_data.get('details', ''))
-        if size_match:
-            art_data['size_x'] = float(size_match.group(1))
-            art_data['size_y'] = float(size_match.group(2))
-            art_data['area'] = art_data['size_x'] * art_data['size_y']
-        else:
-            art_data.update({'size_x': 0, 'size_y': 0, 'area': 0})
+    try:
+        estimate_text = reg_work_soup.find('label', id='ContentPlaceHolder1_lblEstimates').text.split('\n')
+        lo_est, hi_est = get_estimates(estimate_text)
+    except AttributeError:
+        lo_est, hi_est = None, None
 
-        # Medium detection (original logic)
-        medium_match = re.search(r'\b(watercolor|oil|acrylic|mixed media)\b',
-                               art_data.get('details', ''), re.IGNORECASE)
-        art_data['medium'] = medium_match.group(1).title() if medium_match else 'Unknown'
+    try:
+        winning_bid_text = reg_work_soup.find('b', class_='wining-text').find_next('strong').text.split('\n')
+        winning_bid = get_winning_bid(winning_bid_text)
+    except Exception as e:
+        winning_bid = None
 
-        # Original signed logic
-        art_data['signed'] = 'signed' in art_data.get('details', '').lower()
+    try:
+        artist_name = reg_work_soup.find('a', id='ContentPlaceHolder1_AboutWork1__ArtistName').text.strip()
+        artist_name = artist_name.replace("  ", " ")
+    except:
+        artist_name = "NONE"
 
-        return art_data
+    # For the purpose of this script, we'll assume artist data is not available
+    DOB = None
+    DOD = None
+    institution = None
 
-    def get_img_dom_color_and_brightness(self, url):
-        """Analyze image characteristics"""
+    try:
+        title = reg_work_soup.find('span', id='ContentPlaceHolder1_AboutWork1_sn_Workdetails').i.text
+    except:
+        title = "NONE"
+
+    try:
+        image_url = reg_work_soup.find(id='ContentPlaceHolder1_WorkDetails1__Image')['src']
+    except:
+        image_url = None
+
+    try:
+      details_soup = reg_work_soup.find('span', id='ContentPlaceHolder1_AboutWork1_sn_Workdetails').parent
+      details_list = [element.string for element in details_soup.find_all(string=True, recursive=False)]
+      details = get_details(details_list)
+    except Exception as e:
+      details = ""
+      print(f"An error occurred: {e}")
+
+
+    try:
+        provenance = reg_work_soup.find('p', id='ContentPlaceHolder1_AboutWork1__Provenance').get_text(" | ")
+        provenance = provenance.replace("PROVENANCE | ", "")
+        last_provenance = provenance.split(" | ")[-1]
+        num_provenance = provenance.count(" | ") + 1
+    except AttributeError:
+        provenance = None
+        last_provenance = ""
+        num_provenance = 0
+
+    try:
+        exhibition = reg_work_soup.find('p', id='ContentPlaceHolder1_AboutWork1__PublishingDesc').get_text()
+    except AttributeError:
+        exhibition = None
+
+    try:
+        category_style = reg_work_soup.find('a', id='ContentPlaceHolder1_AboutWork1_TellAFriendLink').parent.find_previous_sibling('p').text
+    except:
+        category_style = "NONE"
+
+    try:
+        category = category_style.split('Category: ')[1].split('\n')[0].strip()
+    except IndexError:
+        category = None
+
+    try:
+        style = category_style.split('Style: ')[1].split('\n')[0].strip()
+    except IndexError:
+        style = None
+
+    return (
+        lot_id, artist_name, DOB, DOD, institution, title, winning_bid, lo_est, hi_est, auction_name,
+        category, style, provenance, last_provenance, num_provenance, exhibition, details, image_url)
+
+def connect(link, query=None):
+    """
+    Connects to the given URL and retrieves the HTML content.
+
+    Args:
+        link (str): The URL to connect to.
+        query (dict, optional): Additional query parameters.
+
+    Returns:
+        str: The HTML content of the page.
+    """
+    while True:
         try:
-            with Image.open(requests.get(url, stream=True, timeout=10).raw) as img:
-                img.thumbnail((100, 100))
-                paletted = img.convert('P', palette=Image.Palette.ADAPTIVE, colors=5)
-                palette = paletted.getpalette()
-                color_counts = sorted(paletted.getcolors(), reverse=True)
-                dominant = palette[color_counts[0][1]*3:color_counts[0][1]*3+3]
+            return requests.get(link, params=query, cookies={'UserPref': 'ps=20'}, timeout=10).text
+        except requests.exceptions.RequestException as connecting_error:
+            logging.error(f"Connection error: {connecting_error}")
+            time.sleep(5)
+            continue
 
-                hsv_img = img.convert('HSV')
-                brightness = ImageStat.Stat(hsv_img).mean[2]
+def get_estimates(estimate_text):
+    """
+    Extracts the low and high estimates from the estimate text.
 
-                return f"#{dominant[0]:02x}{dominant[1]:02x}{dominant[2]:02x}", brightness
-        except Exception as e:
-            logging.error(f"Image processing failed: {e}")
-            return None, None
+    Args:
+        estimate_text (list): The list of estimate strings.
 
-    def save_to_csv(self, data):
-        """Save data to timestamped CSV"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"saffron_art_{timestamp}.csv"
-        try:
-            df = pd.DataFrame(data)
-            df.to_csv(filename, index=False)
-            logging.info(f"Saved {len(data)} records to {filename}")
-            return filename
-        except Exception as e:
-            logging.error(f"CSV save failed: {e}")
-            raise
+    Returns:
+        tuple: A tuple containing low estimate and high estimate.
+    """
+    try:
+        lo_est = estimate_text[1].split(' - ')[0].split('$')[1]
+        hi_est = estimate_text[1].split(' - ')[1]
+    except IndexError:
+        lo_est = estimate_text[3].split(' - ')[0].split('$')[1]
+        hi_est = estimate_text[3].split(' - ')[1]
 
-    def send_email_with_attachment(self, filename):
-        """Send email with CSV attachment"""
-        try:
-            msg = MIMEMultipart()
-            msg['From'] = os.getenv('EMAIL_USER')
-            msg['To'] = os.getenv('RECIPIENT_EMAIL')
-            msg['Subject'] = f"Saffron Art Data - {datetime.now().strftime('%Y-%m-%d')}"
+    return (lo_est, hi_est)
 
-            body = f"Attached is the latest Saffron Art data with {len(pd.read_csv(filename))} records."
-            msg.attach(MIMEText(body, 'plain'))
+def get_winning_bid(winning_bid_text):
+    """
+    Extracts the winning bid from the text.
 
-            with open(filename, 'rb') as attachment:
-                part = MIMEBase('application', 'octet-stream')
-                part.set_payload(attachment.read())
-            encoders.encode_base64(part)
-            part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
-            msg.attach(part)
+    Args:
+        winning_bid_text (list): The list of winning bid strings.
 
-            with smtplib.SMTP(os.getenv('SMTP_SERVER'), os.getenv('SMTP_PORT', 587)) as server:
-                server.starttls()
-                server.login(os.getenv('EMAIL_USER'), os.getenv('EMAIL_PASSWORD'))
-                server.send_message(msg)
+    Returns:
+        str: The winning bid amount.
+    """
+    price = [i for i in winning_bid_text if i.strip().startswith('$')][0]
+    price = price.replace(",", "").replace("$", "").strip()
+    return price
 
-            logging.info("Email sent successfully")
-        except Exception as e:
-            logging.error(f"Email failed: {e}")
-            raise
+def get_details(details_list):
+    """
+    Compiles the artwork details from the list.
+
+    Args:
+        details_list (list): The list of detail strings.
+
+    Returns:
+        str: The compiled details string.
+    """
+    full_details = ''
+
+    for detail in details_list[:-1]:
+        detail = ' '.join(' '.join(detail.split('\n')).split())
+        full_details += detail + ' | '
+
+    return full_details
 
 if __name__ == "__main__":
-    scraper = SaffronArtScraper()
-    scraper.scrape_and_save()
+    main()
