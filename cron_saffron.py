@@ -35,7 +35,7 @@ logging.basicConfig(
 )
 
 firefox_path = "/usr/bin/firefox"  # Change this if Firefox is installed elsewhere
-geckodriver_path = "/usr/local/bin/geckodriver"
+geckodriver_path = "/home/ubuntu/saffron-art-scraper/cron-saffron/geckodriver"
 
 class SaffronArtScraper:
     def __init__(self):
