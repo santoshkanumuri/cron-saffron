@@ -65,21 +65,33 @@ class SaffronArtScraper:
                 time.sleep(2 ** attempt)
 
     def setup_driver(self):
-        """Initialize Selenium WebDriver with error handling"""
+        """Initialize Chrome WebDriver"""
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        import chromedriver_autoinstaller
+        
         options = Options()
-        service = Service(geckodriver_path)
-        options.add_argument("--headless")
-        options.add_argument('log-level=3')
-
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
+        
+        # Auto-install chromedriver
+        chromedriver_path = chromedriver_autoinstaller.install()
+        
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                self.driver = webdriver.Firefox(service=service, options=options)
+                self.driver = webdriver.Chrome(
+                    service=Service(chromedriver_path),
+                    options=options
+                )
                 self.driver.implicitly_wait(10)
-                logging.info("WebDriver initialized successfully")
+                logging.info("Chrome WebDriver initialized successfully")
                 return
             except Exception as e:
-                logging.error(f"WebDriver initialization failed (attempt {attempt+1}/{max_retries}): {e}")
+                logging.error(f"Chrome initialization failed (attempt {attempt+1}/{max_retries}): {e}")
                 if attempt == max_retries - 1:
                     raise
                 time.sleep(2 ** attempt)
