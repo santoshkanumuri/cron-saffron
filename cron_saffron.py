@@ -33,6 +33,9 @@ logging.basicConfig(
     ]
 )
 
+firefox_path = "/usr/bin/firefox"  # Change this if Firefox is installed elsewhere
+geckodriver_path = "/usr/local/bin/geckodriver"
+
 class SaffronArtScraper:
     def __init__(self):
         self.SAFFRON_KEY = "Saffron Art"
@@ -63,13 +66,16 @@ class SaffronArtScraper:
     def setup_driver(self):
         """Initialize Selenium WebDriver with error handling"""
         options = Options()
+        service = Service(geckodriver_path)
+        options = webdriver.FirefoxOptions()
+        options.binary_location = firefox_path
         options.add_argument("--headless")
         options.add_argument('log-level=3')
 
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                self.driver = webdriver.Firefox(options=options)
+                self.driver = webdriver.Firefox(service=service, options=options)
                 self.driver.implicitly_wait(10)
                 logging.info("WebDriver initialized successfully")
                 return
