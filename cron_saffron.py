@@ -24,7 +24,7 @@ from PIL import Image, ImageStat
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-import chrome_autoinstaller
+import chromedriver_autoinstaller
 from webdriver_manager.chrome import ChromeDriverManager
 # Load environment variables
 dotenv.load_dotenv()
@@ -148,7 +148,7 @@ def send_error_email(error_msg):
 
 def initialize_driver():
     # Ensure Chrome browser is installed
-    chrome_autoinstaller.install()
+    chromedriver_autoinstaller.install()
     
     # Set Chrome options
     options = Options()
