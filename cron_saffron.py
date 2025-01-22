@@ -189,7 +189,7 @@ def get_last_auction_collected(collection):
         logging.error(f"Error retrieving last auction date: {e}")
         return datetime.min
 
-def scrape_new_auctions(last_auction_collected_date, collection, progress_bar):
+def scrape_new_auctions(last_auction_collected_date, collection):
     """
     Fetches all auctions from Saffron Art's API, filters out the already scraped ones,
     and prepares a list of new auctions to scrape.
@@ -299,8 +299,6 @@ def scrape_new_auctions(last_auction_collected_date, collection, progress_bar):
     total_auctions = len(auctions_to_scrape)
     for idx, auction in enumerate(auctions_to_scrape):
         logging.info(f"Scraping auction {idx + 1} of {total_auctions}: {auction['link']} starting on {auction['s_date'].strftime('%Y-%m-%d')}")
-        progress = (idx + 1) / total_auctions
-        progress_bar.progress(progress)
 
         auction_data = scrape_auction(auction, collection)
         if auction_data:
