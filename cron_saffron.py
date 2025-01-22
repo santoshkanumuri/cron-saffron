@@ -69,7 +69,7 @@ class SaffronArtScraper:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                self.driver = webdriver.Chrome(options=options)
+                self.driver = webdriver.Firefox(options=options)
                 self.driver.implicitly_wait(10)
                 logging.info("WebDriver initialized successfully")
                 return
