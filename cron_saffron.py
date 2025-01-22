@@ -97,7 +97,7 @@ class SaffronArtScraper:
                     raise RuntimeError("Failed to initialize Chrome after multiple attempts")
                 time.sleep(5 * (attempt + 1))
 
-    def get_last_auction_collected(collection):
+    def get_last_auction_date(self):
         """
         Retrieves the latest auction date from the MongoDB collection for 'Saffron Art'.
         Utilizes the 'iso_date' field, which is in ISO 8601 format.
@@ -107,7 +107,7 @@ class SaffronArtScraper:
         """
         try:
             # Retrieve the latest auction based on 'iso_date'
-            last_document = collection.find_one(
+            last_document = self.collection.find_one(
                 {'auction_house': SAFFRON_KEY},
                 sort=[('iso_date', -1)]
             )
