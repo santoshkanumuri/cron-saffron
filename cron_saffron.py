@@ -64,7 +64,7 @@ class SaffronArtScraper:
                     raise
                 time.sleep(2 ** attempt)
 
-   def setup_driver(self):
+    def setup_driver(self):
         """Initialize Chrome WebDriver with proper configuration"""
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
@@ -114,9 +114,9 @@ class SaffronArtScraper:
             
             return datetime.min
         
-    except Exception as e:
-        logging.error(f"Error retrieving last auction date: {e}")
-        return datetime.min
+        except Exception as e:
+            logging.error(f"Error retrieving last auction date: {e}")
+            return datetime.min
 
     def scrape_and_save(self):
         """Main scraping workflow"""
@@ -206,15 +206,15 @@ class SaffronArtScraper:
     
             return new_data
 
-    except Exception as e:
-        logging.error(f"Error processing auction data: {e}")
-        return []
-
-        auction_df = pd.DataFrame(auctions_data)
-        required_columns = ['EventStartDate', 'EventEndDate', 'EventId']
-        if not all(col in auction_df.columns for col in required_columns):
-            logging.error("Missing required columns in auction data")
+        except Exception as e:
+            logging.error(f"Error processing auction data: {e}")
             return []
+
+            auction_df = pd.DataFrame(auctions_data)
+            required_columns = ['EventStartDate', 'EventEndDate', 'EventId']
+            if not all(col in auction_df.columns for col in required_columns):
+                logging.error("Missing required columns in auction data")
+                return []
 
         # Process dates
         auction_df['EventStartDate'] = auction_df['EventStartDate'].str.extract(r'/Date\((\d+)-').astype(float)
