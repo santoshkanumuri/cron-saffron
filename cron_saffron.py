@@ -21,7 +21,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from PIL import Image, ImageStat
-
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+import chrome_autoinstaller
+from webdriver_manager.chrome import ChromeDriverManager
 # Load environment variables
 dotenv.load_dotenv()
 
@@ -143,10 +147,21 @@ def send_error_email(error_msg):
         logging.error(f"Failed to send error email: {str(e)}")
 
 def initialize_driver():
+    # Ensure Chrome browser is installed
+    chrome_autoinstaller.install()
+    
+    # Set Chrome options
     options = Options()
-    options.add_argument("--headless")
-    options.add_argument('log-level=3')
-    driver = webdriver.Firefox(options=options)
+    options.add_argument("--headless=new")  # Modern headless mode
+    options.add_argument("--log-level=3")   # Only fatal errors
+    options.add_argument("--disable-gpu")   # Disable GPU hardware acceleration
+    options.add_argument("--no-sandbox")    # Disable sandbox for Docker/CI compatibility
+    
+    # Configure driver with automatic management
+    service = Service(ChromeDriverManager().install())
+    
+    # Initialize driver
+    driver = webdriver.Chrome(service=service, options=options)
     driver.implicitly_wait(10)
     return driver
 
