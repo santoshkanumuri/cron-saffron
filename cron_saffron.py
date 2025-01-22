@@ -68,8 +68,6 @@ class SaffronArtScraper:
         """Initialize Selenium WebDriver with error handling"""
         options = Options()
         service = Service(geckodriver_path)
-        options = webdriver.FirefoxOptions()
-        options.binary_location = firefox_path
         options.add_argument("--headless")
         options.add_argument('log-level=3')
 
