@@ -66,16 +66,27 @@ class SaffronArtScraper:
 
     def setup_driver(self):
         """Initialize Chrome WebDriver"""
-        options = Options()
-        options.binary_location = r'/usr/bin/firefox-esr'
-        from selenium.webdriver.firefox.service import Service
-        service = Service('/home/pi/.local/bin/geckodriver')
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        import chromedriver_autoinstaller
         
+        options = Options()
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
+        
+        # Auto-install chromedriver
+        chromedriver_path = chromedriver_autoinstaller.install()
         
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                self.driver = webdriver.Firefox(options=options, service=service)
+                self.driver = webdriver.Chrome(
+                    service=Service(chromedriver_path),
+                    options=options
+                )
                 self.driver.implicitly_wait(10)
                 logging.info("Chrome WebDriver initialized successfully")
                 return
