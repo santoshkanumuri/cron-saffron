@@ -69,7 +69,7 @@ class SaffronArtScraper:
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
         import chromedriver_autoinstaller
-        
+
         options = Options()
         options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
@@ -77,10 +77,10 @@ class SaffronArtScraper:
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--disable-blink-features=AutomationControlled")
-        
+
         # Auto-install and configure chromedriver
         chromedriver_path = chromedriver_autoinstaller.install()
-        
+
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -97,23 +97,39 @@ class SaffronArtScraper:
                     raise RuntimeError("Failed to initialize Chrome after multiple attempts")
                 time.sleep(5 * (attempt + 1))
 
-    def get_last_auction_date(self):
-        """Get last scraped auction date (original MongoDB query)"""
+    def get_last_auction_collected(collection):
+        """
+        Retrieves the latest auction date from the MongoDB collection for 'Saffron Art'.
+        Utilizes the 'iso_date' field, which is in ISO 8601 format.
+
+        Returns:
+            datetime: The latest auction date or datetime.min if not found.
+        """
         try:
-            last_document = self.collection.find_one(
-                {'auction_house': self.SAFFRON_KEY},
+            # Retrieve the latest auction based on 'iso_date'
+            last_document = collection.find_one(
+                {'auction_house': SAFFRON_KEY},
                 sort=[('iso_date', -1)]
             )
-            
-            if last_document:
-                # Handle both datetime and string formats
+            if last_document and 'iso_date' in last_document:
                 last_date = last_document['iso_date']
                 if isinstance(last_date, str):
-                    return datetime.fromisoformat(last_date)
-                return last_date.replace(tzinfo=None)
-            
-            return datetime.min
-        
+                    try:
+                        # Parse the ISO 8601 string to a datetime object
+                        dt = datetime.fromisoformat(last_date)
+                    except ValueError:
+                        logging.error(f"Date format mismatch for iso_date: {last_date}")
+                        dt = datetime.min
+                    last_date = dt  # Keep it as datetime object
+                elif isinstance(last_date, datetime):
+                    # Already a datetime object
+                    pass
+                else:
+                    # Unrecognized format, set to minimum datetime
+                    last_date = datetime.min
+                return last_date
+            else:
+                return datetime.min
         except Exception as e:
             logging.error(f"Error retrieving last auction date: {e}")
             return datetime.min
@@ -153,7 +169,7 @@ class SaffronArtScraper:
     def scrape_new_auctions(self, last_auction_collected_date):
         """Scrape new auctions with MongoDB date filtering"""
         logging.info(f"Starting scrape from last collected date: {last_auction_collected_date}")
-        
+
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
@@ -169,25 +185,25 @@ class SaffronArtScraper:
         except Exception as e:
             logging.error(f"Failed to fetch auctions: {e}")
             return []
-    
+
         try:
             auctions_data = auction_json["Events"][2]
             auction_df = pd.DataFrame(auctions_data)
-            
+
             # Original date processing logic
             auction_df['EventStartDate'] = auction_df['EventStartDate'].str.extract(r'/Date\((\d+)-').astype(float)
             auction_df['s_date'] = pd.to_datetime(auction_df['EventStartDate'], unit='ms')
-            
+
             # Apply MongoDB date filter
             auction_df = auction_df[
                 (auction_df['s_date'] > last_auction_collected_date) &
                 (auction_df['s_date'] < pd.Timestamp.now())
             ]
-            
+
             if auction_df.empty:
                 logging.info("No new auctions found based on last collected date")
                 return []
-    
+
             auctions_to_scrape = []
             for _, row in auction_df.iterrows():
                 auctions_to_scrape.append({
@@ -195,7 +211,7 @@ class SaffronArtScraper:
                     's_date': row['s_date'],
                     'e_date': pd.to_datetime(row['EventEndDate'], unit='ms')
                 })
-    
+
             new_data = []
             for idx, auction in enumerate(auctions_to_scrape):
                 logging.info(f"Processing auction {idx+1}/{len(auctions_to_scrape)}")
@@ -203,7 +219,7 @@ class SaffronArtScraper:
                 if auction_data:
                     new_data.extend(auction_data)
                     logging.info(f"Collected {len(auction_data)} lots from this auction")
-    
+
             return new_data
 
         except Exception as e:
@@ -306,7 +322,7 @@ class SaffronArtScraper:
         if self.collection.find_one({'lot_link': lot_link}):
             logging.info(f"Skipping existing lot: {lot_link}")
             return None
-    
+
         try:
             response = requests.get(lot_link, timeout=30)
             response.raise_for_status()
@@ -314,13 +330,13 @@ class SaffronArtScraper:
         except Exception as e:
             logging.error(f"Failed to fetch lot page: {e}")
             return None
-    
+
         try:
             # Original data extraction logic
             lot_id = soup.find("div", {"class": "clearfix artworkImageOptions"}).text.strip()
             auction_info = soup.find('div', class_='artworkDetails').p.strong.text
             auction_name = auction_info.split('\n')[1].strip()
-            
+
             # Original estimate processing
             estimate_text = soup.find('label', id='ContentPlaceHolder1_lblEstimates').text.split('\n')
             lo_est = hi_est = None
@@ -328,7 +344,7 @@ class SaffronArtScraper:
                 estimates = estimate_text[1].split(' - ')
                 lo_est = float(estimates[0].replace('$', '').replace(',', '').strip())
                 hi_est = float(estimates[1].replace('$', '').replace(',', '').strip())
-    
+
             # Original MongoDB date format
             art_data = {
                 'lot_id': lot_id,
@@ -341,7 +357,7 @@ class SaffronArtScraper:
                 'auction_house': self.SAFFRON_KEY,
                 'date_scraped': datetime.now()
             }
-    
+
             # Insert into MongoDB with original logic
             try:
                 self.collection.update_one(
@@ -352,9 +368,9 @@ class SaffronArtScraper:
                 logging.info(f"Inserted/updated lot {lot_id} in MongoDB")
             except Exception as e:
                 logging.error(f"MongoDB operation failed: {e}")
-    
+
             return self.clean_saffron(art_data)
-    
+
         except Exception as e:
             logging.error(f"Error processing lot {lot_link}: {e}")
             return None
@@ -466,7 +482,7 @@ class SaffronArtScraper:
                     art_data[field] = float(art_data[field])
                 except:
                     art_data[field] = None
-    
+
         # Size parsing (original regex logic)
         size_match = re.search(r'(\d+\.?\d*)\s*x\s*(\d+\.?\d*)', art_data.get('details', ''))
         if size_match:
@@ -475,15 +491,15 @@ class SaffronArtScraper:
             art_data['area'] = art_data['size_x'] * art_data['size_y']
         else:
             art_data.update({'size_x': 0, 'size_y': 0, 'area': 0})
-    
+
         # Medium detection (original logic)
-        medium_match = re.search(r'\b(watercolor|oil|acrylic|mixed media)\b', 
+        medium_match = re.search(r'\b(watercolor|oil|acrylic|mixed media)\b',
                                art_data.get('details', ''), re.IGNORECASE)
         art_data['medium'] = medium_match.group(1).title() if medium_match else 'Unknown'
-    
+
         # Original signed logic
         art_data['signed'] = 'signed' in art_data.get('details', '').lower()
-    
+
         return art_data
 
     def get_img_dom_color_and_brightness(self, url):
