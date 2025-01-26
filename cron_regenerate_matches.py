@@ -78,7 +78,7 @@ def query_pinecone(index, image_id, top_k=30):
             print(f"Query result for image {image_id}: len={len(query_result['matches'])}")
             if not query_result['matches']:
                 return []
-            matches = query_result['matches'][0].get('matches', [])
+            matches = query_result['matches'][0]
             print(f"Matches for image {image_id}: {matches}")
             return matches
     except Exception as e:
@@ -209,7 +209,7 @@ def regenerate_matches():
     total_docs = len(documents)
 
 
-    for idx, doc in enumerate(documents, 1):
+    for idx, doc in enumerate(documents[:5], 1):
         image_id = doc.get('none_@file')
         if not image_id:
             logging.info(f"Document {idx}/{total_docs} missing 'none_@file'. Skipping.")
