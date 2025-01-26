@@ -339,7 +339,7 @@ def upload_to_mongodb(data):
     Uploads the data to MongoDB.
     """
     MONGO_URI = os.getenv("MONGO_URI")
-    DB_NAME = os.getenv("DB_NAME")
+    DB_NAME = os.getenv("DATABASE_NAME")
     COLLECTION_NAME = os.getenv("COLLECTION_NAME")
 
     if not all([MONGO_URI, DB_NAME, COLLECTION_NAME]):
