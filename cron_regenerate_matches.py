@@ -79,9 +79,11 @@ def query_pinecone(index, image_id, top_k=30):
             if not query_result['matches']:
                 return []
             matches = query_result['matches'][0].get('matches', [])
+            print(f"Matches for image {image_id}: {matches}")
             return matches
     except Exception as e:
         logging.error(f"Error querying Pinecone for image {image_id}: {e}")
+        print(f"Error querying Pinecone for image {image_id}: {e}")
         return []
 
 def process_matches(doc, matches, image_id_to_winning_bid, image_id_to_date, image_id_to_auction_house):
@@ -216,6 +218,7 @@ def regenerate_matches():
             continue
 
         logging.info(f"Processing document {idx}/{total_docs} with none_@file: {image_id}")
+        print(f"Processing document {idx}/{total_docs} with none_@file: {image_id}")
 
         # Query Pinecone
         matches = query_pinecone(pinecone_index, image_id, top_k=30)
