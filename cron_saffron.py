@@ -26,6 +26,8 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 import chromedriver_autoinstaller
 from webdriver_manager.chrome import ChromeDriverManager
+import boto3
+from botocore.exceptions import NoCredentialsError, ClientError
 # Load environment variables
 dotenv.load_dotenv()
 
@@ -80,6 +82,7 @@ def main():
             logging.info(f"Saved new data to {csv_path}")
 
             # Send email with attachment
+            upload_to_s3(csv_path)
             send_email(csv_path, has_data=True)
         else:
             # Send status email with no data
@@ -90,6 +93,45 @@ def main():
         send_error_email(str(e))
     finally:
         logging.info("Scraping process completed")
+
+def upload_to_s3(file_path, bucket_name="cron-saffron", object_name="new_saffron_data.csv"):
+    """
+    Upload a file to an AWS S3 bucket
+
+    :param file_path: Path to local file to upload
+    :param bucket_name: Target S3 bucket name
+    :param object_name: S3 object name (optional). If not specified, uses file name
+    :return: True if successful, False otherwise
+    """
+    # If S3 object_name not specified, use file name
+    if object_name is None:
+        object_name = os.path.basename(file_path)
+
+    # Initialize S3 client
+    s3_client = boto3.client('s3')
+
+    try:
+        # Check if file exists locally
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"The file {file_path} does not exist")
+
+        # Upload the file
+        s3_client.upload_file(file_path, bucket_name, object_name)
+        print(f"File {file_path} uploaded to s3://{bucket_name}/{object_name}")
+        return True
+
+    except FileNotFoundError as e:
+        print(f"Error: {str(e)}")
+        return False
+    except NoCredentialsError:
+        print("Error: AWS credentials not found")
+        return False
+    except ClientError as e:
+        print(f"AWS Client Error: {str(e)}")
+        return False
+    except Exception as e:
+        print(f"Unexpected Error: {str(e)}")
+        return False
 
 def send_email(csv_path=None, has_data=False, error_msg=None):
     """Send email with CSV attachment or status message"""
@@ -102,7 +144,7 @@ def send_email(csv_path=None, has_data=False, error_msg=None):
         body = f"Scraping failed with error:\n\n{error_msg}"
     elif has_data:
         msg['Subject'] = f"Saffron Art Data - {datetime.now().strftime('%Y-%m-%d')}"
-        body = "New Saffron Art data is attached."
+        body = "New Saffron Art data is attached and uploaded to S3 for further processing."
         # Attach CSV
         with open(csv_path, "rb") as attachment:
             part = MIMEBase("application", "octet-stream")
