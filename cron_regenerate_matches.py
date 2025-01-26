@@ -215,7 +215,6 @@ def regenerate_matches():
         if not matches:
             logging.info(f"No matches found for image {image_id}.")
             updated_documents.append(doc)
-            progress_bar.progress(idx / total_docs)
             continue
 
         # Process matches and categorize
