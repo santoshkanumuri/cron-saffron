@@ -79,7 +79,7 @@ def query_pinecone(index, image_id, top_k=30):
             if not query_result['matches']:
                 return []
             matches = query_result.get('matches', [])
-            print(f"Matches for image {image_id}: {matches}")
+            # print(f"Matches for image {image_id}: {matches}")
             return matches
     except Exception as e:
         logging.error(f"Error querying Pinecone for image {image_id}: {e}")
@@ -231,7 +231,6 @@ def regenerate_matches():
         # Process matches and categorize
         updated_doc = process_matches(doc, matches, image_id_to_winning_bid, image_id_to_date, image_id_to_auction_house)
         updated_documents.append(updated_doc)
-        progress_bar.progress(idx / total_docs)
 
     logging.info("Updating documents in MongoDB...")
     try:
