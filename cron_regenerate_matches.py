@@ -11,6 +11,12 @@ from pinecone.grpc import PineconeGRPC as Pinecone
 import logging
 
 
+logging.basicConfig(
+    filename='regenerate_matches.log',
+    level=logging.INFO,
+    format='%(asctime)s:%(levelname)s:%(message)s'
+)
+
 # Load environment variables from .env file
 dotenv.load_dotenv()
 # --------------------- Configuration ---------------------
@@ -69,6 +75,7 @@ def query_pinecone(index, image_id, top_k=30):
         if not pd.isna(image_id):
             query_result = index.query(id=image_id, top_k=top_k, include_values=False)
             logging.info(f"Query result for image {image_id}: len={len(query_result['matches'])}")
+            print(f"Query result for image {image_id}: len={len(query_result['matches'])}")
             if not query_result['matches']:
                 return []
             matches = query_result['matches'][0].get('matches', [])
@@ -204,6 +211,7 @@ def regenerate_matches():
         image_id = doc.get('none_@file')
         if not image_id:
             logging.info(f"Document {idx}/{total_docs} missing 'none_@file'. Skipping.")
+            print(f"Document {idx}/{total_docs} missing 'none_@file'. Skipping.")
             updated_documents.append(doc)
             continue
 
