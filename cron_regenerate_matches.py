@@ -209,7 +209,7 @@ def regenerate_matches():
     total_docs = len(documents)
 
 
-    for idx, doc in enumerate(documents[:5], 1):
+    for idx, doc in enumerate(documents, 1):
         image_id = doc.get('none_@file')
         if not image_id:
             logging.info(f"Document {idx}/{total_docs} missing 'none_@file'. Skipping.")
