@@ -11,12 +11,7 @@ from pinecone.grpc import PineconeGRPC as Pinecone
 import logging
 
 
-logging.basicConfig(
-    filename='regenerate_matches.log',
-    level=logging.INFO,
-    format='%(asctime)s:%(levelname)s:%(message)s'
-)
-
+# --------------------- Configuration ---------------------
 # Load environment variables from .env file
 dotenv.load_dotenv()
 # --------------------- Configuration ---------------------
@@ -35,15 +30,19 @@ OUTPUT_CSV = "updated_matches.csv"
 
 # ----------------------------------------------------------
 
+logging.basicConfig(
+  level=logging.INFO,
+  format='%(asctime)s - %(levelname)s - %(message)s' ,
+  filename='regenerate_matches.log'
+)
+
 def initialize_pinecone(api_key, index_name):
     pc=Pinecone(api_key=api_key)
     try:
         index = pc.Index(index_name)
         logging.info(f"Connected to Pinecone index '{index_name}'.")
-        logging.info(f"Connected to Pinecone index '{index_name}'.")
         return index
     except Exception as e:
-        logging.error(f"Error connecting to Pinecone index '{index_name}': {e}")
         logging.error(f"Pinecone connection error: {e}")
         raise Exception(f"Error initializing Pinecone index: {e}")
 
@@ -54,7 +53,7 @@ def connect_mongodb(uri, db_name, collection_name):
     return collection
 
 def fetch_documents(collection):
-    # Fetch documents where 'none_@file' exists
+    # Fetch documents where 'none_@file' exists only first 5 documents
     documents = list(collection.find({"none_@file": {"$exists": True}}))
     return documents
 
@@ -63,10 +62,11 @@ def build_hashmaps(documents):
     image_id_to_date = {}
     image_id_to_auction_house = {}
     for doc in documents:
-        image_id = doc.get('none_@file')
+        raw_image_id = str(doc.get('none_@file', ''))
+        image_id = raw_image_id.replace('\\', '/').strip()
         if image_id:
             image_id_to_winning_bid[image_id] = doc.get('winning_bid', None)
-            image_id_to_date[image_id] = doc.get('iso_date', None)
+            image_id_to_date[image_id] = doc.get('iso_date', None).isoformat() if doc.get('iso_date') else None
             image_id_to_auction_house[image_id] = doc.get('auction_house', None)
     return image_id_to_winning_bid, image_id_to_date, image_id_to_auction_house
 
@@ -75,24 +75,22 @@ def query_pinecone(index, image_id, top_k=30):
         if not pd.isna(image_id):
             query_result = index.query(id=image_id, top_k=top_k, include_values=False)
             logging.info(f"Query result for image {image_id}: len={len(query_result['matches'])}")
-            print(f"Query result for image {image_id}: len={len(query_result['matches'])}")
             if not query_result['matches']:
                 return []
             matches = query_result.get('matches', [])
-            # print(f"Matches for image {image_id}: {matches}")
+            # matches = query_result['matches']
             return matches
     except Exception as e:
         logging.error(f"Error querying Pinecone for image {image_id}: {e}")
-        print(f"Error querying Pinecone for image {image_id}: {e}")
         return []
 
 def process_matches(doc, matches, image_id_to_winning_bid, image_id_to_date, image_id_to_auction_house):
-    image_id = doc['none_@file']
+    image_id = doc['none_@file'].replace('\\', '/').strip()
     input_date_str = image_id_to_date.get(image_id)
     input_auction_house = image_id_to_auction_house.get(image_id)
-
     try:
         input_date = dateutil.parser.parse(input_date_str)
+
     except Exception as e:
         logging.warning(f"Error parsing date for image {image_id}: {e}")
         input_date = None
@@ -177,6 +175,7 @@ def process_matches(doc, matches, image_id_to_winning_bid, image_id_to_date, ima
 
 def regenerate_matches():
     logging.info("Starting regeneration process...")
+
     try:
         pinecone_index = initialize_pinecone(PINECONE_API_KEY, INDEX_NAME)
         logging.info("Pinecone initialized successfully.")
@@ -189,6 +188,7 @@ def regenerate_matches():
     except Exception as e:
         logging.error(f"Error connecting to MongoDB: {e}")
         return
+
 
     try:
         documents = fetch_documents(collection)
@@ -208,23 +208,17 @@ def regenerate_matches():
     updated_documents = []
     total_docs = len(documents)
 
-
     for idx, doc in enumerate(documents, 1):
         image_id = doc.get('none_@file')
+        print("image id",image_id)
         if not image_id:
-            logging.info(f"Document {idx}/{total_docs} missing 'none_@file'. Skipping.")
-            print(f"Document {idx}/{total_docs} missing 'none_@file'. Skipping.")
             updated_documents.append(doc)
             continue
-
-        logging.info(f"Processing document {idx}/{total_docs} with none_@file: {image_id}")
-        print(f"Processing document {idx}/{total_docs} with none_@file: {image_id}")
 
         # Query Pinecone
         matches = query_pinecone(pinecone_index, image_id, top_k=30)
 
         if not matches:
-            logging.info(f"No matches found for image {image_id}.")
             updated_documents.append(doc)
             continue
 
@@ -232,7 +226,8 @@ def regenerate_matches():
         updated_doc = process_matches(doc, matches, image_id_to_winning_bid, image_id_to_date, image_id_to_auction_house)
         updated_documents.append(updated_doc)
 
-    logging.info("Updating documents in MongoDB...")
+
+
     try:
         for doc in updated_documents:
             update_fields = {
