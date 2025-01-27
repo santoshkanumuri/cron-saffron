@@ -77,7 +77,7 @@ def connect_mongodb(uri: str, db_name: str, collection_name: str):
         logging.error(f"MongoDB connection error: {str(e)}")
         raise
 
-def fetch_documents(collection: pymongo.collection.Collection):
+def fetch_documents(collection):
     """Retrieve documents containing 'none_@file' field"""
     try:
         query = {"none_@file": {"$exists": True, "$ne": None}}
@@ -89,7 +89,7 @@ def fetch_documents(collection: pymongo.collection.Collection):
         logging.error(f"Document fetch error: {str(e)}")
         raise
 
-def build_hashmaps(documents: List[Dict]):
+def build_hashmaps(documents):
     """Create lookup dictionaries for fast data access"""
     image_id_to_winning_bid = {}
     image_id_to_date = {}
@@ -128,11 +128,11 @@ def query_pinecone(index: Pinecone, image_id: str, top_k: int = 30) -> List[Dict
         return []
 
 def process_matches(
-    doc: Dict,
-    matches: List[Dict],
-    image_id_to_winning_bid: Dict,
-    image_id_to_date: Dict,
-    image_id_to_auction_house: Dict
+    doc,
+    matches,
+    image_id_to_winning_bid,
+    image_id_to_date,
+    image_id_to_auction_house
 ) :
     """Process and categorize Pinecone matches into different groups"""
     # Initialize document fields
@@ -206,16 +206,8 @@ def process_matches(
 
     return doc
 
-def export_to_csv(documents: List[Dict], filename: str):
-    """Export processed documents to CSV file"""
-    try:
-        df = pd.DataFrame(documents)
-        df.to_csv(filename, index=False)
-        logging.info(f"Successfully exported {len(documents)} records to {filename}")
-    except Exception as e:
-        logging.error(f"CSV export failed: {str(e)}")
 
-def update_mongodb(collection: pymongo.collection.Collection, documents: List[Dict]) -> None:
+def update_mongodb(collection, documents) -> None:
     """Perform bulk update of MongoDB documents"""
     operations = []
     update_fields = [
@@ -291,7 +283,6 @@ def regenerate_matches():
                 logging.info(f"Processed {idx}/{len(documents)} documents")
 
         update_mongodb(collection, updated_docs)
-        export_to_csv(updated_docs, OUTPUT_CSV)
         logging.info("Match regeneration completed successfully")
 
     except Exception as e:
