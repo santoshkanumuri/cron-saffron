@@ -38,7 +38,7 @@ logging.basicConfig(
     ]
 )
 
-def validate_environment() -> None:
+def validate_environment():
     """Validate required environment variables"""
     required_vars = {
         "MONGO_URI": MONGO_URI,
@@ -54,7 +54,7 @@ def validate_environment() -> None:
         logging.error(error_msg)
         raise EnvironmentError(error_msg)
 
-def initialize_pinecone(api_key: str, index_name: str) -> Pinecone:
+def initialize_pinecone(api_key: str, index_name: str):
     """Initialize Pinecone connection and return index handle"""
     try:
         pc = Pinecone(api_key=api_key)
@@ -65,7 +65,7 @@ def initialize_pinecone(api_key: str, index_name: str) -> Pinecone:
         logging.error(f"Pinecone connection error: {str(e)}")
         raise
 
-def connect_mongodb(uri: str, db_name: str, collection_name: str) -> pymongo.collection.Collection:
+def connect_mongodb(uri: str, db_name: str, collection_name: str):
     """Establish MongoDB connection and return collection handle"""
     try:
         client = pymongo.MongoClient(uri)
@@ -77,7 +77,7 @@ def connect_mongodb(uri: str, db_name: str, collection_name: str) -> pymongo.col
         logging.error(f"MongoDB connection error: {str(e)}")
         raise
 
-def fetch_documents(collection: pymongo.collection.Collection) -> List[Dict]:
+def fetch_documents(collection: pymongo.collection.Collection):
     """Retrieve documents containing 'none_@file' field"""
     try:
         query = {"none_@file": {"$exists": True, "$ne": None}}
@@ -89,7 +89,7 @@ def fetch_documents(collection: pymongo.collection.Collection) -> List[Dict]:
         logging.error(f"Document fetch error: {str(e)}")
         raise
 
-def build_hashmaps(documents: List[Dict]) -> Tuple[Dict, Dict, Dict]:
+def build_hashmaps(documents: List[Dict]):
     """Create lookup dictionaries for fast data access"""
     image_id_to_winning_bid = {}
     image_id_to_date = {}
@@ -133,7 +133,7 @@ def process_matches(
     image_id_to_winning_bid: Dict,
     image_id_to_date: Dict,
     image_id_to_auction_house: Dict
-) -> Dict:
+) :
     """Process and categorize Pinecone matches into different groups"""
     # Initialize document fields
     for category in ['overall', 'same_day', 'before']:
@@ -206,7 +206,7 @@ def process_matches(
 
     return doc
 
-def export_to_csv(documents: List[Dict], filename: str) -> None:
+def export_to_csv(documents: List[Dict], filename: str):
     """Export processed documents to CSV file"""
     try:
         df = pd.DataFrame(documents)
@@ -255,7 +255,7 @@ def update_mongodb(collection: pymongo.collection.Collection, documents: List[Di
     except Exception as e:
         logging.error(f"Update error: {str(e)}")
 
-def regenerate_matches() -> None:
+def regenerate_matches():
     """Main workflow controller"""
     logging.info("Starting match regeneration process")
 
