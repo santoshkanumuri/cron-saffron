@@ -33,9 +33,9 @@ def send_csvs_to_subscribers():
 
         # Validate CSV files exist
         csv_files = [
-            'similarities.csv',
-            'bid_data.csv',
-            'transformed_bid_data.csv'
+            './files/similarities.csv',
+            './files/bid_data.csv',
+            './files/transformed_bid_data.csv'
         ]
 
         missing_files = [f for f in csv_files if not os.path.exists(f)]
