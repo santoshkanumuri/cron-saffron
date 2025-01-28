@@ -17,7 +17,7 @@ def send_csvs_to_subscribers():
 
         # Connect to MongoDB
         client = MongoClient(os.getenv("MONGO_URI"))
-        db = client[os.getenv("DB_NAME")]
+        db = client[os.getenv("DATABASE_NAME")]
         collection = db[os.getenv("MONGO_EMAIL_COLLECTION")]
 
         # Get all subscriber emails
