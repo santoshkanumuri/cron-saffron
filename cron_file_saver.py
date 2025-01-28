@@ -4,6 +4,7 @@ import pandas as pd
 from dotenv import load_dotenv
 import os
 import logging
+import boto3
 
 load_dotenv()
 
@@ -107,11 +108,39 @@ def download_transformed_data():
     transform_bid_data(df, './files/transformed_bid_data.csv')
     logging.info("Data downloaded and transformed successfully in the code directory")
 
+def upload_to_s3(file_path, bucket_name, object_name=None):
+    if object_name is None:
+        object_name = os.path.basename(file_path)
+    s3_client = boto3.client(
+        's3',
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
+    )
+    try:
+        response = s3_client.upload_file(file_path, bucket_name, object_name)
+    except Exception as e:
+        logging.error(f"Failed to upload {file_path} to S3: {str(e)}")
+        return ""
+    logging.info(f"{file_path} uploaded successfully to S3 bucket: {bucket_name}")
+    #return s3 object link
+    link=f"https://{bucket_name}.s3.amazonaws.com/{object_name}"
+    return link
+
 
 def download_data():
     download_similarities_data()
     download_bid_data()
     download_transformed_data()
+    link1 = upload_to_s3('./files/similarities.csv', 'scraped-data')
+    link2 = upload_to_s3('./files/bid_data.csv', 'scraped-data')
+    link3 = upload_to_s3('./files/transformed_bid_data.csv', 'scraped-data')
+    with open('links.txt') as f :
+        f.write(f"Similarities data: {link1}\n")
+        f.write(f"Bid data: {link2}\n")
+        f.write(f"Transformed bid data: {link3}\n")
+    logging.info("Data download and upload to S3 complete")
+
+
 
 
 if __name__ == "__main__":

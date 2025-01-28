@@ -1,11 +1,10 @@
 import os
 import smtplib
 import logging
+import logging
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import time
@@ -23,10 +22,10 @@ logging.basicConfig(
     ]
 )
 
-def send_csvs_to_subscribers():
-    """Send CSV files to validated subscribers with error handling"""
+def send_links_to_subscribers():
+    """Send links from links.txt to validated subscribers with error handling"""
     try:
-        logging.info("Starting CSV distribution to subscribers")
+        logging.info("Starting link distribution to subscribers")
 
         # MongoDB connection with error handling
         try:
@@ -53,45 +52,25 @@ def send_csvs_to_subscribers():
             logging.error(f"Missing email field in documents: {str(e)}")
             return
 
-        # CSV file validation
-        csv_files = [
-            './files/similarities.csv',
-            './files/bid_data.csv',
-            './files/transformed_bid_data.csv'
-        ]
-        missing_files = [f for f in csv_files if not os.path.exists(f)]
-        if missing_files:
-            logging.error(f"Missing CSV files: {', '.join(missing_files)}")
+        # Read links from links.txt
+        try:
+            with open('links.txt', 'r', encoding='utf-8') as file:
+                links_text = file.read()
+                if not links_text.strip():
+                    logging.error("links.txt is empty or missing")
+                    return
+        except FileNotFoundError:
+            logging.error("links.txt file not found")
             return
 
         # Create base email message
         base_msg = MIMEMultipart()
         base_msg['From'] = os.getenv("EMAIL_USER")
-        base_msg['Subject'] = f"Latest Art Market Data - {datetime.now().strftime('%Y-%m-%d')}"
+        base_msg['Subject'] = f"Latest Links - {datetime.now().strftime('%Y-%m-%d')}"
 
         # Email body
-        body_text = """Attached are the latest art market datasets:
-        1. similarities.csv - Artist similarity analysis
-        2. bid_data.csv - Raw auction bid data
-        3. transformed_bid_data.csv - Processed bid transactions
-        """
+        body_text = links_text
         base_msg.attach(MIMEText(body_text, 'plain'))
-
-        # Attach files to base message
-        for csv_file in csv_files:
-            try:
-                with open(csv_file, "rb") as f:
-                    part = MIMEBase("application", "octet-stream")
-                    part.set_payload(f.read())
-                    encoders.encode_base64(part)
-                    part.add_header(
-                        "Content-Disposition",
-                        f"attachment; filename={os.path.basename(csv_file)}",
-                    )
-                    base_msg.attach(part)
-            except Exception as e:
-                logging.error(f"Failed to attach {csv_file}: {str(e)}")
-                return
 
         # SMTP connection
         try:
@@ -130,4 +109,4 @@ def send_csvs_to_subscribers():
         raise
 
 if __name__ == "__main__":
-    send_csvs_to_subscribers()
+    send_links_to_subscribers()
