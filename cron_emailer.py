@@ -1,3 +1,15 @@
+import os
+import smtplib
+import logging
+from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+from pymongo import MongoClient
+
+
+
 def send_csvs_to_subscribers():
     """Send all 3 CSV files to subscribers in MongoDB email collection"""
     try:
@@ -71,3 +83,7 @@ def send_csvs_to_subscribers():
     except Exception as e:
         logging.critical(f"Failed to send subscriber emails: {str(e)}", exc_info=True)
         raise
+
+
+if __name__ == "__main__":
+    send_csvs_to_subscribers()
