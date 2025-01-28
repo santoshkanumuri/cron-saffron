@@ -20,7 +20,7 @@ art_collection = db[os.getenv('COLLECTION_NAME')]
 saffron_bid_data_collection = db[os.getenv('SAFFRON_BID_COLLECTION_NAME')]
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s', filename='bid_data.log')
 
 import pandas as pd
 
@@ -143,7 +143,7 @@ def fetch_and_parse_bid_data(lot_link, lot_id):
     # Construct the contextKey using auction_id and lot_number
     context_key = construct_context_key(auction_id, lot_number)
 
-    logging.info(f"Using contextKey: {context_key} for lot_id {int(lot_id)}")
+    logging.debug(f"Using contextKey: {context_key} for lot_id {int(lot_id)}")
 
     data = {
         "contextKey": context_key
@@ -152,9 +152,9 @@ def fetch_and_parse_bid_data(lot_link, lot_id):
     url = 'https://www.saffronart.com/webservices/DurationCatalogService.asmx/GetBidHistory'
 
     try:
-        logging.info("Sending POST request to %s for lot_id %s", url, int(lot_id))
+        logging.debug("Sending POST request to %s for lot_id %s", url, int(lot_id))
         response = requests.post(url, headers=headers, json=data)
-        logging.info("Received response with status code %d for lot_id %s", response.status_code, int(lot_id))
+        logging.debug("Received response with status code %d for lot_id %s", response.status_code, int(lot_id))
 
         # Raise an exception if the HTTP request returned an unsuccessful status code
         response.raise_for_status()
@@ -162,7 +162,7 @@ def fetch_and_parse_bid_data(lot_link, lot_id):
         # Parse the JSON response
         try:
             json_response = response.json()
-            logging.info("Successfully parsed JSON response for lot_id %s", int(lot_id))
+            logging.debug("Successfully parsed JSON response for lot_id %s", int(lot_id))
         except json.JSONDecodeError as e:
             logging.error("Failed to parse response as JSON for lot_id %s: %s", lot_id, e)
             logging.debug("Response content for lot_id %s: %s", lot_id, response.text)
@@ -233,7 +233,7 @@ def fetch_and_parse_bid_data(lot_link, lot_id):
         if not bids:
             logging.warning("No valid bids found for lot_id %s", int(lot_id))
 
-        logging.info(f"Extracted {len(bids)} bids for lot_id {int(lot_id)}")
+        logging.debug(f"Extracted {len(bids)} bids for lot_id {int(lot_id)}")
         return bids
 
     except requests.exceptions.HTTPError as http_err:
@@ -265,10 +265,10 @@ def bid_main():
         logging.error(f"Error fetching existing lot_links from MongoDB: {e}")
         return
 
-    # Query documents where auction_house is "Saffron Art" and lot_link not in existing_lot_links
+    # Query documents where auction_house is "Saffron Art" and lot_link not in existing_lot_links and not NaN
     query = {
-        "auction_house": "Saffron Art",
-        "lot_link": {"$nin": existing_lot_links}
+        'auction_house': 'Saffron Art',
+        'lot_link': {'$nin': existing_lot_links + [None]}
     }
 
     # Remove the limit to process all lots
