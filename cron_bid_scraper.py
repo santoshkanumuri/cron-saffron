@@ -268,7 +268,7 @@ def bid_main():
     # Query documents where auction_house is "Saffron Art" and lot_link not in existing_lot_links and not NaN
     query = {
         'auction_house': 'Saffron Art',
-        'lot_link': {'$nin': existing_lot_links +float('nan')},
+        'lot_link': {'$nin': existing_lot_links +[float('nan')]},
     }
 
     # Remove the limit to process all lots
