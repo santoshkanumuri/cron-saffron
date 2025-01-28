@@ -307,7 +307,7 @@ def bid_main():
             continue
           bids = fetch_and_parse_bid_data(lot_link, int(lot_id))
         except Exception as e:
-            logging.error(f"Error fetching and parsing bid data for lot_id {int(lot_id)}: {e}")
+            logging.error(f"Error fetching and parsing bid data for lot_id {lot_id}: {e}")
             continue
         if not bids:
             continue
