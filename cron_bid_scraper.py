@@ -302,6 +302,9 @@ def bid_main():
 
         # Fetch and parse API data
         try:
+          if lot_id is None:
+            logging.error(f"Lot ID is missing for lot_link: {lot_link}")
+            continue
           bids = fetch_and_parse_bid_data(lot_link, int(lot_id))
         except Exception as e:
             logging.error(f"Error fetching and parsing bid data for lot_id {int(lot_id)}: {e}")
