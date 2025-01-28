@@ -120,11 +120,10 @@ def upload_to_s3(file_path, bucket_name, object_name=None):
         response = s3_client.upload_file(file_path, bucket_name, object_name)
     except Exception as e:
         logging.error(f"Failed to upload {file_path} to S3: {str(e)}")
-        return ""
+        return False
     logging.info(f"{file_path} uploaded successfully to S3 bucket: {bucket_name}")
     #return s3 object link
-    link=f"https://{bucket_name}.s3.amazonaws.com/{object_name}"
-    return link
+    return True
 
 
 def download_data():
@@ -134,11 +133,10 @@ def download_data():
     link1 = upload_to_s3('./files/similarities.csv', 'scraped-art-data')
     link2 = upload_to_s3('./files/bid_data.csv', 'scraped-art-data')
     link3 = upload_to_s3('./files/transformed_bid_data.csv', 'scraped-art-data')
-    with open('links.txt') as f :
-        f.write(f"Similarities data: {link1}\n")
-        f.write(f"Bid data: {link2}\n")
-        f.write(f"Transformed bid data: {link3}\n")
-    logging.info("Data download and upload to S3 complete")
+    if link1 and link2 and link3:
+        logging.info("All files uploaded successfully to S3")
+    else:
+        logging.error("Failed to upload all files to S3")
 
 
 
