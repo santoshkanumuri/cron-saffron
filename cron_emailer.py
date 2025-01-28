@@ -7,7 +7,10 @@ from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 from pymongo import MongoClient
+from dotenv import load_dotenv
 
+
+load_dotenv()
 
 
 def send_csvs_to_subscribers():
