@@ -567,7 +567,7 @@ def process_lot(lot_link, auction, collection):
             "dom_color": dom_color,
             "brightness": brightness,
             'iso_date': auction['s_date'].isoformat(),
-            'est_cur': 'USD',
+            'est_curr': 'USD',
         }
 
         # Extract integer lot_id
