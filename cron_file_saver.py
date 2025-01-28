@@ -131,9 +131,9 @@ def download_data():
     download_similarities_data()
     download_bid_data()
     download_transformed_data()
-    link1 = upload_to_s3('./files/similarities.csv', 'scraped-data')
-    link2 = upload_to_s3('./files/bid_data.csv', 'scraped-data')
-    link3 = upload_to_s3('./files/transformed_bid_data.csv', 'scraped-data')
+    link1 = upload_to_s3('./files/similarities.csv', 'scraped-art-data')
+    link2 = upload_to_s3('./files/bid_data.csv', 'scraped-art-data')
+    link3 = upload_to_s3('./files/transformed_bid_data.csv', 'scraped-art-data')
     with open('links.txt') as f :
         f.write(f"Similarities data: {link1}\n")
         f.write(f"Bid data: {link2}\n")
