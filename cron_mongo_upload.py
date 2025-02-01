@@ -201,7 +201,7 @@ def validate_data(df):
     required_columns = [
         'lot_id', 'none_@file', 'image_url', 'lot_link',
         'iso_date', 'lo_est', 'hi_est', 'winning_bid',
-        'auction_link', 'est_cur'
+        'auction_link', 'est_curr'
     ]
     missing_columns = [col for col in required_columns if col not in df.columns]
     if missing_columns:
